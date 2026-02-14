@@ -22,3 +22,9 @@ i should also note that when you enter the key, it is stored locally on your ram
 # streamlit website url (to use the app): 
 
 https://agenticcodingpipeline-9ko4n9cu8ek4fw42dxsseg.streamlit.app/
+
+# local use
+
+It is also possible to use this program locally by downloading the file, installing the libraries outlined in requirements.txt, and inputting your api key in a separate .env file but i would recommend using the website for ease of use.
+
+also, if you were going to use it locally, it isn't that safe to use the sys.executable line in a non-containerized environment so i would comment that out and comment in the docker command in the python library so that you can use a containerized environment. this would also mean you have docker desktop installed and open to use it.
