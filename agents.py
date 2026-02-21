@@ -61,6 +61,14 @@ class State(TypedDict):
     summary: str
     status: str
     iterations: int
+
+    mode: str
+    
+    #learning
+    learn_plan: str
+    learn_code: str
+    learn_summ: str
+    
     
     
 
@@ -154,6 +162,54 @@ def summarize(state: State):
                        Here was the code output: {state['result']}""")
   return {"summary": summary.content}
 
+# learning route
+def learning_route(state: State):
+  if (state["mode"] == "learning"):
+    return "learning_plan"
+  else:
+    return END
+
+# learning plan
+def learning_plan(state: State):
+  """Creates a plan for learning what the plan was about. will ask ~5-10 questions about how to create a plan like this, eval answers in next node."""
+  learn_plan = llm.invoke(f"""You are a coding teacher given a plan about how to code a project. Output a response that includes 
+                          1. How a student should think about creating this plan (ex. steps and guide them to learn how to build this project) 
+                          2. 5-10 questions regarding this project to assess them on if they learned anything about how to code this.
+                          Their request was {state["request"]}
+                          The generated plan to code this project was {state["plan"]}""")
+
+  return {"learn_plan": learn_plan.content}
+
+# learning code
+def learning_code(state: State):
+  """Creates a plan for learning what the code was about and how to code a project like this. will ask ~5-10 questions about how to create code like this, eval answers in next node."""
+  learn_code = llm.invoke(f"""You are a coding teacher given code on how to code this project. Output a response that includes 
+                          1. First, assess their responses to the previous questions from a different output.
+                          The questions and learning plan were: {state["learn_plan"]}
+                          The human responses were ######################################################################################################## input human resp here
+                          2. How a student should think about creating this code (ex. steps and guide them to learn how to build this project with code) 
+                          3. 5-10 questions regarding this project to assess them on if they learned anything about how to code this.
+                          Their request was {state["request"]}
+                          The generated plan to code this project was {state["plan"]}
+                          The generated code was {state["coding"]}""")
+
+  return {"learn_code": learn_code.content}
+
+# learning summary - connect code and plan
+def learning_summary(state: State):
+  """Assess answers from a student and then outputs a summary for this project and the steps to code it."""
+  learn_summ = llm.invoke(f"""You are a coding teacher given a plan and code for how to code this project. You will summarize the steps to code this (in a teacher way). Output a response that includes
+                          1. First, assess their responses to the previous questions from a different output.
+                          The questions and learning code were: {state["learn_code"]}
+                          The human responses were############################################################################################
+                          2. Give an overall summary of this project and how to code it. (there was already a learning node for generating a plan and learning how to code it)
+                          Their request was {state["request"]}
+                          The generated plan to code this project was {state["plan"]}
+                          The generated code was {state["coding"]}""")
+  
+  return {"learn_summ": learn_summ.content}
+
+
 workflow = StateGraph(State)
 
 workflow.add_node("gen_plan", gen_plan)
@@ -161,6 +217,12 @@ workflow.add_node("gen_code", gen_code)
 workflow.add_node("test_code", test_code)
 workflow.add_node("critique_code", critique_code)
 workflow.add_node("summarize", summarize)
+
+# learn nodes
+workflow.add_node("learning_plan", learning_plan)
+workflow.add_node("learning_code", learning_code)
+workflow.add_node("learning_summary", learning_summary)
+
 
 workflow.add_edge(START, "gen_plan")
 
@@ -176,7 +238,19 @@ workflow.add_conditional_edges(
   route_after_critic,
   {"gen_code": "gen_code", "summarize": "summarize"}
 )
-workflow.add_edge("summarize", END)
+
+
+# end loop if not learning, continue if learning
+workflow.add_conditional_edges(
+  "summarize", 
+  learning_route,
+  {"learning_plan": "learning_plan", END: END},
+  )
+
+# learning route
+workflow.add_edge("learning_plan", "learning_code")
+workflow.add_edge("learning_code", "learning_summary")
+workflow.add_edge("learning_summary", END)
 
 chain = workflow.compile()
 
