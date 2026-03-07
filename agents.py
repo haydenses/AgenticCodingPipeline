@@ -84,7 +84,13 @@ def gen_plan(state: State):
     """Generate a plan to complete the inputted code request"""
     
     msg = llm.invoke(f"Generate a plan to complete the code request inputted by the user. only write out the plan, do not code the whole program. be sure to include unit tests in your plan. The request is {state['request']}")
-    return {"plan": msg.content, "iterations": 0}
+    
+    plan = msg.content
+    
+    if state.get("mode") == "hitl":
+      plan = interrupt({"type": "edit_plan", "draft": plan})
+    
+    return {"plan": plan, "iterations": 0}
 
 
 def gen_code(state: State):
@@ -97,7 +103,14 @@ def gen_code(state: State):
                        Fix the error that caused this wrong output. Generate the code again fully. **WRAP THE CODE IN A SINGLE ``` (triple backticks) BLOCK ONLY ONCE AKA ONLY ONE FILE**""")
     else:
       msg = llm.invoke(f"Generate code following the plan that is given. Use this plan as a baseline of how to generate the code. The original user request was {state['request']}. The plan is {state['plan']}. **WRAP THE CODE IN A SINGLE ``` (triple backticks) BLOCK ONLY ONCE AKA ONLY ONE FILE**")
-    return {'coding': msg.content, "iterations": state["iterations"] + 1}
+    
+    coding = msg.content
+    
+    if state.get("mode") == "hitl":
+      # output the draft before so we can edit the coding thing before its submitted, then place back in coding
+      coding = interrupt({"draft": coding})
+    
+    return {'coding': coding, "iterations": state["iterations"] + 1}
 
 def test_code(state: State):
     lang, code = extract(state["coding"])
@@ -108,8 +121,8 @@ def test_code(state: State):
     # this exec will take in input code and read it and execute it within python. basically we are executing everything with our code
     # docker doesn't work w/ streamlit cloud, we can use the sys.exec way only without opening a docker script since streamlit cloud is a container itself 
     # would recommend using docker container if running program locally
-    # cmd = ["docker", "run", "--rm", "-i", "python:3.9-alpine", "python", "-c", "import sys; exec(sys.stdin.read())"]
-    cmd = [sys.executable, "-c", "import sys; exec(sys.stdin.read())"]
+    cmd = ["docker", "run", "--rm", "-i", "python:3.9-alpine", "python", "-c", "import sys; exec(sys.stdin.read())"]
+    # cmd = [sys.executable, "-c", "import sys; exec(sys.stdin.read())"]
     
     # have to use try and except for unittest library
     try:
@@ -432,3 +445,107 @@ with learn:
         # rerun streamlit to account for new changes
         st.rerun()
         
+with hitl:
+  if "thread_id" not in st.session_state:
+    st.session_state.thread_id = "hitl1"
+  # setup learn_hist for streamlit session state
+  # learn history basically saves all of the outputs whenever we run the loop and then ask for human inputs. we need to recontruct this history from top to bottom again and save it
+  if "hitl_history" not in st.session_state:
+    st.session_state.hitl_history=[]
+    
+  config_lang = {"recursion_limit": 25, "configurable": {"thread_id":st.session_state.thread_id}}
+  
+  input = st.text_area("What do you want to code? (only python supported currently) (hitl)", height=150, value="Create a python script that performs a binary search through a list.")
+  
+  def llm_render_outputs(output):
+    for key, value in output.items():
+      if key == "gen_plan":
+        with left_col:
+          with st.expander("Step: Generated Plan", expanded=True):
+            # st.write(f"### Step: **Generated Plan**")
+            st.write(value["plan"])
+            
+      elif key == "gen_code":
+        with left_col:
+          with st.expander("Step: Generated Code", expanded=True):
+          # https://docs.streamlit.io/develop/api-reference/text/st.code
+            st.code(value["coding"], language="python")
+            st.write(f"iteration: {value['iterations']}")
+      
+      elif key == "test_code":
+        with left_col:
+          with st.expander("### Step: **Tested Code**", expanded=True):
+            if value["status"] == "works":
+              st.success(f"Output: {value['result']}")
+            else:
+              st.error(f"Error: {value['result']}")
+      
+      elif key == "critique_code":
+        with left_col:
+          with st.expander("Step: Critiqued Code", expanded=True):
+            st.write(f"Critic Decision: **{value['critic_des']}**")
+            st.write(f"Critic Explaination: {value['critic_exp']}")
+      
+      elif key == "summarize":
+        with left_col:
+          with st.expander("Step: Summarized Code and Process", expanded=True):
+            st.success("### Final Summary")
+            st.write(value["summary"])
+    
+      elif key == "learning_plan":
+        with right_col:
+          with st.expander("Step: Learning Plan", expanded=True):
+            st.write(value["learn_plan"])
+      
+      elif key == "learning_code":
+        with right_col:
+          with st.expander("Step: Learning Code", expanded=True):
+            st.write(value["learn_code"])
+      
+      elif key == "learning_summary":
+        with right_col:
+          with st.expander("Step: Learning Summary", expanded=True):
+            st.write(value["learn_summ"])
+      
+  for chunk in st.session_state.hitl_history:
+    llm_render_outputs(chunk)
+  
+    if st.button("Run Learning Orchestration Loop"):
+    # realized that I need uuid here because when we stay on the page (w/o refreshing) we need some type of way to actually start a new session and this does that. 
+    # also, cookies can interfere with this even when refreshed so this is just best practice
+      st.session_state.thread_id = str(uuid.uuid4())
+      config_lang["configurable"]["thread_id"] = st.session_state.thread_id
+      
+      # reconfigure the learn history
+      st.session_state.learn_history =[] 
+      
+      st.write("---")
+      input_chain = {"request": input, "iterations": 0, "mode": "learning"}
+      
+      for output in chain.stream(input_chain, config=config_lang):
+        st.session_state.hitl_history.append(output)
+        llm_render_outputs(output)
+      st.rerun()
+    
+  curr_state = chain.get_state(config_lang)
+  
+  if curr_state.next:
+    next_node = curr_state.next[0]
+    
+    interrupt_msg = f"waiting for answers before {next_node}"
+    
+    # get the contents of the current node
+    interrupt_contents = curr_state.tasks[0].interrupts[0].value
+  
+    st.write(f"{interrupt_msg}")
+    user_resp = st.text_area("edit the contents: ", value=interrupt_contents["draft"])
+    
+    if st.button("Submit Answers and Continue the Loop"):
+      
+      # need command to rerun with the new user response. this is necessary in langgraph documentation essentially
+      for output in chain.stream(Command(resume=user_resp), config=config_lang):
+        st.session_state.hitl_history.append(output)
+        llm_render_outputs(output)
+      
+      # rerun streamlit to account for new changes
+      st.rerun()
