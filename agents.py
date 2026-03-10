@@ -83,7 +83,7 @@ class State(TypedDict):
 def gen_plan(state: State):
     """Generate a plan to complete the inputted code request"""
     
-    msg = llm.invoke(f"Generate a plan to complete the code request inputted by the user. only write out the plan, do not code the whole program. be sure to include unit tests in your plan. The request is {state['request']}")
+    msg = llm.invoke(f"Generate a plan to complete the code request inputted by the user. only write out the plan, do not code the whole program. be sure to include unit tests in your plan (**include something to say not to use the unittest library. instead, have the program output expected and outputted behavior using print. do not ask to input any numbers because this script will be run autonomously without any human supervision.**). The request is {state['request']}")
     
     plan = msg.content
     
@@ -108,7 +108,7 @@ def gen_code(state: State):
     
     if state.get("mode") == "hitl":
       # output the draft before so we can edit the coding thing before its submitted, then place back in coding
-      coding = interrupt({"draft": coding})
+      coding = interrupt({"draft": coding, "type": "edit_code"})
     
     return {'coding': coding, "iterations": state["iterations"] + 1}
 
@@ -121,8 +121,8 @@ def test_code(state: State):
     # this exec will take in input code and read it and execute it within python. basically we are executing everything with our code
     # docker doesn't work w/ streamlit cloud, we can use the sys.exec way only without opening a docker script since streamlit cloud is a container itself 
     # would recommend using docker container if running program locally
-    cmd = ["docker", "run", "--rm", "-i", "python:3.9-alpine", "python", "-c", "import sys; exec(sys.stdin.read())"]
-    # cmd = [sys.executable, "-c", "import sys; exec(sys.stdin.read())"]
+    # cmd = ["docker", "run", "--rm", "-i", "python:3.9-alpine", "python", "-c", "import sys; exec(sys.stdin.read())"]
+    cmd = [sys.executable, "-c", "import sys; exec(sys.stdin.read())"]
     
     # have to use try and except for unittest library
     try:
@@ -132,16 +132,29 @@ def test_code(state: State):
       output = f"stdout: {result.stdout}; \n stderr: {result.stderr}"
       
       if result.returncode == 0:
-        return {"result": output, "status": "works"}
+        status = "works"
       else: 
-        return {"result": output, "status": "error"}
+        status = "error"
       
       
     except Exception as e:
-      return {"result": str(e), "status": "error"}
+      output = str(e)
+      status = "error"
+
+    if state.get("mode") == "hitl":
+      output = interrupt({"draft": output, "type": "test_code"})
+      
+      # need to check if the output is an instance of dictionary because it will cause an error otherwise
+      if isinstance(output, dict) and ((output.get("action")) == "restart"):
+        return {"result": output.get("draft", ""), "status": "restart"}
+      
+    return {"result": output, "status": status}
 
 def route_after_test(state: State):
   #first check for iter, moved the check from gen_code to here because it was causing an infinite loop w/ errors
+  if state.get("status") == "restart":
+    return "gen_code"
+  
   if (state["iterations"] >= 3):
     return "critique_code"
   
@@ -206,7 +219,7 @@ def learning_code(state: State):
   """Creates a plan for learning what the code was about and how to code a project like this. will ask ~5-10 questions about how to create code like this, eval answers in next node."""
   
   # interrupt for human response https://docs.langchain.com/oss/python/langgraph/interrupts
-  human_response = interrupt("Enter you answer for the previously asked questions: ")
+  human_response = interrupt("Enter your answer for the previously asked questions: ")
   
   learn_code = llm.invoke(f"""You are a coding teacher given code on how to code this project. Output a response that includes 
                           1. First, assess their responses to the previous questions from a different output.
@@ -224,7 +237,7 @@ def learning_code(state: State):
 def learning_summary(state: State):
   """Assess answers from a student and then outputs a summary for this project and the steps to code it."""
   
-  human_response = interrupt("Enter you answer for the previously asked questions: ")
+  human_response = interrupt("Enter your answer for the previously asked questions: ")
   
   learn_summ = llm.invoke(f"""You are a coding teacher given a plan and code for how to code this project. You will summarize the steps to code this (in a teacher way). Output a response that includes
                           1. First, assess their responses to the previous questions from a different output.
@@ -290,7 +303,10 @@ chain = st.session_state.chain
 auto, learn, hitl = st.tabs(["Autonomous", "Learning", "HITL"])
 
 with auto:
-  input = st.text_area("What do you want to code? (only python supported currently) (autonomous)", height=150, value="Create a python script that performs a binary search through a list.")
+  if "thread_id" not in st.session_state:
+    st.session_state.thread_id = "autonomous1"
+  
+  input = st.text_area("What do you want to code? (only python supported currently) (autonomous)", height=150, value="Create a simple python script that performs a binary search through a list.")
 
   if st.button("Run Autonomous Orchestration Loop"):
     # --- creates a mkdwn line separator
@@ -299,7 +315,7 @@ with auto:
       
     # Run the graph and stream outputs step-by-step
     # recursion limit to make it so it doesn't perform a lot of api calls
-    for output in chain.stream(input, config={"recursion_limit": 25}):
+    for output in chain.stream(input, config={"recursion_limit": 25, "configurable": {"thread_id":st.session_state.thread_id}}):
       for key, value in output.items():
               
         if key == "gen_plan":
@@ -315,10 +331,11 @@ with auto:
         
         elif key == "test_code":
           with st.expander("### Step: **Tested Code**", expanded=True):
+            output_val = value.get("result", "")
             if value["status"] == "works":
-              st.success(f"Output: {value['result']}")
+              st.success(f"Output: {output_val}")
             else:
-              st.error(f"Error: {value['result']}")
+              st.error(f"Error: {output_val}")
         
         elif key == "critique_code":
           with st.expander("Step: Critiqued Code", expanded=True):
@@ -345,7 +362,7 @@ with learn:
   
   config_lang = {"recursion_limit": 25, "configurable": {"thread_id":st.session_state.thread_id}}
   
-  input = st.text_area("What do you want to code? (only python supported currently) (learning)", height=150, value="Create a python script that performs a binary search through a list.")
+  input = st.text_area("What do you want to code? (only python supported currently) (learning)", height=150, value="Create a simple python script that performs a binary search through a list.")
 
   left_col, right_col = st.columns(2)
   # i need this all in function to help compartimentalize the outputs easily
@@ -399,11 +416,7 @@ with learn:
           with st.expander("Step: Learning Summary", expanded=True):
             st.write(value["learn_summ"])
       
-
-  #render all chunks again
-  for chunk in st.session_state.learn_history:
-    llm_render_outputs(chunk)
-
+      
   # same button as before
   if st.button("Run Learning Orchestration Loop"):
     # realized that I need uuid here because when we stay on the page (w/o refreshing) we need some type of way to actually start a new session and this does that. 
@@ -422,6 +435,13 @@ with learn:
       llm_render_outputs(output)
     st.rerun()
   
+  
+  
+  #render all chunks again
+  for chunk in st.session_state.learn_history:
+    llm_render_outputs(chunk)
+    
+    
   curr_state = chain.get_state(config_lang)
   
   # https://docs.langchain.com/oss/python/langgraph/interrupts
@@ -455,78 +475,61 @@ with hitl:
     
   config_lang = {"recursion_limit": 25, "configurable": {"thread_id":st.session_state.thread_id}}
   
-  input = st.text_area("What do you want to code? (only python supported currently) (hitl)", height=150, value="Create a python script that performs a binary search through a list.")
+  input = st.text_area("What do you want to code? (only python supported currently) (hitl)", height=150, value="Create a simple python script that performs a binary search through a list.")
   
   def llm_render_outputs(output):
     for key, value in output.items():
       if key == "gen_plan":
-        with left_col:
-          with st.expander("Step: Generated Plan", expanded=True):
-            # st.write(f"### Step: **Generated Plan**")
-            st.write(value["plan"])
-            
+        with st.expander("Step: Generated Plan", expanded=True):
+          # st.write(f"### Step: **Generated Plan**")
+          st.write(value["plan"])
+          
       elif key == "gen_code":
-        with left_col:
-          with st.expander("Step: Generated Code", expanded=True):
-          # https://docs.streamlit.io/develop/api-reference/text/st.code
-            st.code(value["coding"], language="python")
-            st.write(f"iteration: {value['iterations']}")
+        with st.expander("Step: Generated Code", expanded=True):
+        # https://docs.streamlit.io/develop/api-reference/text/st.code
+          st.code(value["coding"], language="python")
+          st.write(f"iteration: {value['iterations']}")
       
       elif key == "test_code":
-        with left_col:
-          with st.expander("### Step: **Tested Code**", expanded=True):
-            if value["status"] == "works":
-              st.success(f"Output: {value['result']}")
-            else:
-              st.error(f"Error: {value['result']}")
+        with st.expander("### Step: **Tested Code**", expanded=True):
+          output_val = value.get("result", "")
+          if value["status"] == "works":
+            st.success(f"Output: {output_val}")
+          elif value["status"] == "restart":
+            st.code(output_val, language="text")
+          else:
+            st.error(f"Error: {output_val}")
       
       elif key == "critique_code":
-        with left_col:
-          with st.expander("Step: Critiqued Code", expanded=True):
-            st.write(f"Critic Decision: **{value['critic_des']}**")
-            st.write(f"Critic Explaination: {value['critic_exp']}")
-      
-      elif key == "summarize":
-        with left_col:
-          with st.expander("Step: Summarized Code and Process", expanded=True):
-            st.success("### Final Summary")
-            st.write(value["summary"])
+        with st.expander("Step: Critiqued Code", expanded=True):
+          st.write(f"Critic Decision: **{value['critic_des']}**")
+          st.write(f"Critic Explaination: {value['critic_exp']}")
     
-      elif key == "learning_plan":
-        with right_col:
-          with st.expander("Step: Learning Plan", expanded=True):
-            st.write(value["learn_plan"])
-      
-      elif key == "learning_code":
-        with right_col:
-          with st.expander("Step: Learning Code", expanded=True):
-            st.write(value["learn_code"])
-      
-      elif key == "learning_summary":
-        with right_col:
-          with st.expander("Step: Learning Summary", expanded=True):
-            st.write(value["learn_summ"])
-      
+      elif key == "summarize":
+        with st.expander("Step: Summarized Code and Process", expanded=True):
+          st.success("### Final Summary")
+          st.write(value["summary"])
+  
+  if st.button("Run HITL Orchestration Loop"):
+  # realized that I need uuid here because when we stay on the page (w/o refreshing) we need some type of way to actually start a new session and this does that. 
+  # also, cookies can interfere with this even when refreshed so this is just best practice
+    st.session_state.thread_id = str(uuid.uuid4())
+    config_lang["configurable"]["thread_id"] = st.session_state.thread_id
+    
+    # reconfigure the learn history
+    st.session_state.hitl_history =[] 
+    
+    st.write("---")
+    input_chain = {"request": input, "iterations": 0, "mode": "hitl"}
+
+    for output in chain.stream(input_chain, config=config_lang):
+      st.session_state.hitl_history.append(output)
+      llm_render_outputs(output)
+    st.rerun()
+
   for chunk in st.session_state.hitl_history:
     llm_render_outputs(chunk)
   
-    if st.button("Run Learning Orchestration Loop"):
-    # realized that I need uuid here because when we stay on the page (w/o refreshing) we need some type of way to actually start a new session and this does that. 
-    # also, cookies can interfere with this even when refreshed so this is just best practice
-      st.session_state.thread_id = str(uuid.uuid4())
-      config_lang["configurable"]["thread_id"] = st.session_state.thread_id
-      
-      # reconfigure the learn history
-      st.session_state.learn_history =[] 
-      
-      st.write("---")
-      input_chain = {"request": input, "iterations": 0, "mode": "learning"}
-      
-      for output in chain.stream(input_chain, config=config_lang):
-        st.session_state.hitl_history.append(output)
-        llm_render_outputs(output)
-      st.rerun()
-    
   curr_state = chain.get_state(config_lang)
   
   if curr_state.next:
@@ -536,16 +539,51 @@ with hitl:
     
     # get the contents of the current node
     interrupt_contents = curr_state.tasks[0].interrupts[0].value
-  
-    st.write(f"{interrupt_msg}")
-    user_resp = st.text_area("edit the contents: ", value=interrupt_contents["draft"])
-    
-    if st.button("Submit Answers and Continue the Loop"):
+
+    # IF TEST CODE, THEN SEE IF WE WANT TO CHANGE PLAN AFTER VIEWING OUTPUT
+    if (interrupt_contents["type"] == "test_code"):
       
-      # need command to rerun with the new user response. this is necessary in langgraph documentation essentially
-      for output in chain.stream(Command(resume=user_resp), config=config_lang):
-        st.session_state.hitl_history.append(output)
-        llm_render_outputs(output)
+      # subheaders for visual clarity
+      st.subheader("OPTION 1: Continue Loop")
+      with st.expander("current output: ", expanded=True):
+        st.code(interrupt_contents["draft"], language="text")
       
-      # rerun streamlit to account for new changes
-      st.rerun()
+      if st.button("continue the loop fully",  key = "btn_continue_aft_test"):
+        for output in chain.stream(Command(resume=interrupt_contents["draft"]), config=config_lang):
+          st.session_state.hitl_history.append(output)
+          llm_render_outputs(output)
+        st.rerun()
+      
+      st.write("---")
+      
+      st.subheader("OPTION 2: edit plan and start from the beginning")
+      curr_plan = curr_state.values.get("plan")
+      new_plan = st.text_area("edit the plan: ", value=curr_plan, height = 300)
+      
+      if (st.button("OPTION 2: update plan and restart code gen", key="update_plan")):
+        # new command to go to gen code right after rivising plan
+        plan_output = {"gen_plan": {"plan": new_plan}}
+        command=Command(resume={"action": "restart", "draft": interrupt_contents["draft"]}, update={"plan": new_plan, "iterations": 0})
+        for output in chain.stream(command, config=config_lang):
+          st.session_state.hitl_history.append(output)
+          llm_render_outputs(output)
+          if "test_code" in output:
+            st.session_state.hitl_history.append(plan_output)
+            llm_render_outputs(plan_output)
+        st.rerun()
+        
+      
+    else:    
+      st.write(f"{interrupt_msg}")
+      user_resp = st.text_area("edit the contents: ", value=interrupt_contents["draft"], height=300)
+      
+      if st.button("continue the hitl loop"):
+        
+        # need command to rerun with the new user response. this is necessary in langgraph documentation essentially
+        for output in chain.stream(Command(resume=user_resp), config=config_lang):
+          st.session_state.hitl_history.append(output)
+          llm_render_outputs(output)
+        
+        # rerun streamlit to account for new changes
+        st.rerun()
+
