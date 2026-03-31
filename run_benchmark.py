@@ -1,6 +1,7 @@
 import json
 import time
 import os
+import re
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
@@ -16,7 +17,7 @@ RESULTS_FILE = "bench_results.json"
 MAX_QUESTIONS_PER_DIFFICULTY = 5
 
 MODELS_TO_TEST =[
-    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
 ]
 
 # llm as a judge
@@ -46,7 +47,9 @@ def evaluate_with_judge(prompt, generated_code, actual_output, expected_output):
 --- AGENT'S ACTUAL EXECUTION OUTPUT ---
 {actual_output}
 
-Task: Did the agent's actual execution output mathematically and logically match the expected output? 
+Task: Your primary goal is to judge the code and the output together to determine if the code actually completes the task and correctly implements the problem's logic. 
+- Ensure the code does what it is supposed to do generally, not just for the provided test case (e.g., no hardcoding, logic is sound).
+- Check if the actual execution output mathematically and logically matches the expected output.
 - Ignore minor whitespace, extra newlines, or print formatting differences.
 - If the 'stderr' contains a crash/traceback, it is an automatic fail.
 - If the agent output nothing, it is an automatic fail.
@@ -65,10 +68,12 @@ def run_benchmarks():
 
     # dataset is within the dict called codeparrot apps cause thats were i got it from
     dataset = data.get("codeparrot_apps", {})
-    all_results =[]
+    all_results ={}
     
     for model_name in MODELS_TO_TEST:
         print(f"model testing: {model_name}")
+        
+        all_results[model_name] = []
         
         app.llm = ChatGoogleGenerativeAI(model=model_name)
         chain = app.workflow.compile()
@@ -98,48 +103,72 @@ def run_benchmarks():
                         }, 
                         config={"recursion_limit": 25}
                     )
+                    # stop timer here
+                    
+                    duration = time.time() - start_time
                     
                     final_code = final_state.get("coding", "")
-                    final_output = final_state.get("result", "")
+                    raw_output = final_state.get("result", "")
                     iterations = final_state.get("iterations", 0)
                     
                     # Call the Judge
                     passed, reasoning = evaluate_with_judge(
                         prompt=problem["question"],
                         generated_code=final_code,
-                        actual_output=final_output,
+                        actual_output=raw_output,
                         expected_output=expected_output
                     )
                     
+                    # regex parse to get the string t osee if it matches
+                    stdout_match = re.search(r"stdout:\s*(.*?)\s*;\s*\n\s*stderr:", raw_output, re.DOTALL)
+                    # if regex match, get rid of it, else just keep the raw output and we can check later if it worked or not
+                    if stdout_match:
+                        parsed_output = stdout_match.group(1)
+                    else:
+                        parsed_output = raw_output
+                    
+                    # split to get rid of whitespace all together. this caused problems with output matching before
+                    output_match = (parsed_output.split() == expected_output.split())
+                    
                 except Exception as e:
+                    duration = time.time() - start_time
+                    
                     print(f"Error executing graph: {e}")
                     final_code = ""
+                    raw_output = str(e)
                     final_output = str(e)
                     iterations = 0
                     passed = False
+                    output_match = False
                     reasoning = "execution failed or hit recursion limit"
                 
-                duration = time.time() - start_time
                 status = "PASSED" if passed else "FAILED"
                 print(f"Result: {status} in {iterations} iterations ({duration:.1f}s)")
+                print(f"Output Match: {output_match}")
+                print(f"raw Output: {raw_output}")
+                print(f"parsed Output: {parsed_output}")
+                print(f"expected Output: {expected_output}")
                 print(f"Judge Reasoning: {reasoning}\n")
                 
+                
                 # append results
-                all_results.append({
-                    "model": model_name,
+                all_results[model_name].append({
                     "difficulty": difficulty,
                     "problem_id": problem_id,
                     "passed": passed,
+                    "output_match": output_match,
                     "iterations_used": iterations,
                     "duration_seconds": round(duration, 2),
                     "judge_reasoning": reasoning,
-                    "final_output": final_output,
+                    "raw_output": raw_output,
+                    "final_output": parsed_output,
                     "expected_output": expected_output
                 })
                 
                 # save to file
                 with open(RESULTS_FILE, "w", encoding="utf-8") as out_file:
                     json.dump(all_results, out_file, indent=4)
+
 
 if __name__ == "__main__":
     run_benchmarks()
