@@ -40,7 +40,7 @@ if not os.getenv("IS_BENCHMARK") == "true":
     st.header("config")
     
     # select model
-    model_provider = st.selectbox("Select Provider", ["Gemini", "Claude", "OpenRouter"])
+    model_provider = st.selectbox("Select Provider", ["Gemini", "Claude", "OpenRouter", "Local-Ollama"])
     
     if model_provider == "Gemini":
       api_key = st.text_input("enter gemini api key:", type="password", value=os.getenv("GOOGLE_API_KEY", ""))
@@ -60,6 +60,18 @@ if not os.getenv("IS_BENCHMARK") == "true":
       if api_key:
           os.environ["OPENROUTER_API_KEY"] = api_key
 
+    elif model_provider == "Local-Ollama":
+      api_key = st.text_input("enter openrouter api key:", type="password")
+      model_name = st.text_input("model id (llama-coder)")
+      model_name = "llama-coder"
+      llm = ChatOpenAI(
+          model=model_name,
+          base_url="http://localhost:11434/v1", # The Ollama port
+          api_key="ollama" # Dummy key
+      )
+    
+    
+
   if not model_name:
     st.write("Please enter a model id in sidebar")
     st.stop()
@@ -74,6 +86,12 @@ if not os.getenv("IS_BENCHMARK") == "true":
           api_key=os.getenv("OPENROUTER_API_KEY"), 
           base_url="https://openrouter.ai/api/v1" # need base url to make sure we are working with openrouter
       )
+  elif model_provider == "Local-Ollama":
+      llm = ChatOpenAI(
+            model=model_name,
+            base_url="http://localhost:11434/v1", # The Ollama port
+            api_key="ollama" # Dummy key
+        )
   else:
       st.write("enter api key to continue")
       st.stop()
