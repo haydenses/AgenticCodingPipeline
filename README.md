@@ -1,30 +1,47 @@
-# Intro
+# Initial Setup
 
-To use this program with ease, go to the streamlit website listed below
+The best method of using this application would be to fork the Agentic Coding Pipeline repository and download the files onto your machine locally. 
 
-i used a google api key to configure this project since it can be generated for free and it has 25 free uses with the code 
+First, in order to begin to use this project, make sure to have python installed on your machine.
 
-to use this program though, a minimum of 4 agents will be invoked, meaning you can have around 6 tries per day of this program, if the agents are all only called once
+After you have forked the project or downloaded the files locally and you are located in the project folder for this application, you need to use the command “pip install -r requirements.txt” to install all of the dependencies for this project. 
 
+In order to use the research agent for this project, you will also have to download and unzip a chroma_db file in the folder that the project is stored in because this file has the python documentation information. The link to this zip file can be found here: https://drive.google.com/drive/folders/1RssBurqRLTgIKLFLsrASnjntJknBDtys?usp=sharing
 
-# generating a key and using the website:
+# Running the Project
 
-to generate a key to use it in the website, go to https://aistudio.google.com/ and create an account
+After all of the dependencies are installed and you have unzipped the chroma_db folder, you can now run the application with “streamlit run agents.py”.
+
+Usually, the website will pop up after this command starts or you can go to the local host or network host links that appear in the terminal after you run this command.
+
+After the page loads, there will be a configuration sidebar in order to use the page. 
+
+You must enter in the provider, api key, and model id and then press ‘submit config’ to access the rest of the application.
+
+# Generating a key for the configuration:
+
+I will show the instructions for generating a google api key and have free tries. Feel free to use any other provider such as claude, openrouter, ollama.
+
+to generate a key to use it in the website, go to https://aistudio.google.com/ and create an account or go to any ap
 
 then generate an api key through their website website by going to the dashboard, clicking create api key at the top right, and creating that key
 
 the key will be a really long name that you will need to paste into the website
 
-i should also note that when you enter the key, it is stored locally on your ram in the browser tab, not on the website or anything adjacent to the website
+# After configuration
 
+After the configuration is submitted, you now have access to the website. Simply enter in a prompt and press ‘Run {mode} Orchestration Loop’ to start the loop. 
 
+An optional checkbox is presented if you want to run a research agent that will gather details from python documentation, web information, or both before running the complete loop. 
 
-# streamlit website url (to use the app): 
+Switch tabs to switch modes.
 
-https://agenticcodingpipeline-9ko4n9cu8ek4fw42dxsseg.streamlit.app/
+The final tab is designated so a user can view the benchmark dashboard.
 
-# local use
+# FAQs
 
-It is also possible to use this program locally by downloading the file, installing the libraries outlined in requirements.txt, and inputting your api key in a separate .env file but i would recommend using the website for ease of use.
+Q: Why does the “pip install -r requirements.txt” or “streamlit run agents.py” commands not work
+A: Make sure pip can interact with the terminal or in the system path. Also, running “python -m streamlit run agents.py” may be a solution for the streamlit error.
 
-also, if you were going to use it locally, it isn't that safe to use the sys.executable line in a non-containerized environment so i would comment that out and comment in the docker command in the python library so that you can use a containerized environment. this would also mean you have docker desktop installed and open to use it.
+Q: How do I get an API key?
+A: There are multiple providers listed with their own instructions on how to get API keys. Every service is different and the application does not provide one since it would cost a lot of money.
