@@ -1,6 +1,12 @@
 langchain-google-genai
-langgraph
-streamlit
+langchain-anthropic
+langchain-openai
 python-dotenv
-typing-extensions
+langgraph
 pydantic
+streamlit
+pandas
+plotly
+typing-extensions
+langchain-community
+langchain-huggingface
