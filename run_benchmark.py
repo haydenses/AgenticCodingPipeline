@@ -4,6 +4,7 @@ import os
 import re
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 import app
 
@@ -17,8 +18,12 @@ RESULTS_FILE = "bench_results.json"
 MAX_QUESTIONS_PER_DIFFICULTY = 5
 
 MODELS_TO_TEST =[
-    "gemini-2.5-flash",
+    {"provider": "gemini", "model": "gemini-3-flash-preview"},
+    {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview"}
 ]
+
+RESEARCH_MODE = [False, True]
 
 # llm as a judge
 judge_llm_no_output = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", temperature=0.0)
@@ -68,15 +73,35 @@ def run_benchmarks():
 
     # dataset is within the dict called codeparrot apps cause thats were i got it from
     dataset = data.get("codeparrot_apps", {})
-    all_results ={}
     
-    for model_name in MODELS_TO_TEST:
-        print(f"model testing: {model_name}")
+    # this is so there is no overwritting of previous results. check everything exists and is all good and then store the results so we have them
+    if os.path.exists(RESULTS_FILE):
+        with open(RESULTS_FILE, "r", encoding="utf-8") as f:
+            try:
+                all_results = json.load(f)
+            except json.JSONDecodeError:
+                all_results = {}
+    else:
+        all_results = {}
+    
+    for model_info in MODELS_TO_TEST:
+        provider = model_info["provider"]
+        model_name = model_info["model"]
+        print(f"\n ----------------  model testing: {model_name} -------------------------- \n")
         
-        all_results[model_name] = []
+        if provider == "gemini":
+            app.llm = ChatGoogleGenerativeAI(model=model_name)
+        elif provider == "ollama":
+            app.llm = ChatOpenAI(
+                model=model_name,
+                base_url="http://127.0.0.1:11434/v1", # 127.0.0.1 for wsl
+                api_key="ollama"
+            )
         
-        app.llm = ChatGoogleGenerativeAI(model=model_name)
         chain = app.workflow.compile()
+        
+
+        all_results[model_name] = []
         
         for difficulty, problems in dataset.items():
             print(f"curr difficulty: {difficulty.upper()}")
@@ -84,6 +109,12 @@ def run_benchmarks():
             # slice list up to max questions per difficulty (5)
             for i, problem in enumerate(problems[:MAX_QUESTIONS_PER_DIFFICULTY]):
                 problem_id = problem.get("problem_id", f"{difficulty}_{i}")
+                
+                # this is when it crashes somtimes to check if its already done
+                already_done = any(r.get("problem_id") == problem_id for r in all_results[model_name])
+                if already_done:
+                    print(f"skipping problem {problem_id}")                
+                
                 print(f"running problem: {problem_id}...")
                 
                 # extract inputs and outputs from dataset
@@ -99,7 +130,8 @@ def run_benchmarks():
                             "request": problem["question"], 
                             "test_input": test_input, # pipe to stdin
                             "iterations": 0, 
-                            "mode": "autonomous"
+                            "mode": "autonomous",
+                            "use_research": False
                         }, 
                         config={"recursion_limit": 25}
                     )
@@ -137,6 +169,7 @@ def run_benchmarks():
                     final_code = ""
                     raw_output = str(e)
                     final_output = str(e)
+                    parsed_output = str(e)
                     iterations = 0
                     passed = False
                     output_match = False
